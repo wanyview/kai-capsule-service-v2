@@ -1,0 +1,8 @@
+# Kai Capsule Service V2.0 - EvoMap Enhanced
+# 知识胶囊服务增强版，整合 EvoMap 优点
+
+fastapi>=0.104.0
+uvicorn>=0.24.0
+pydantic>=2.5.0
+httpx>=0.25.0
+python-multipart>=0.0.6
