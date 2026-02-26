@@ -575,7 +575,450 @@ async def get_stats():
     """统计信息"""
     return get_stats()
 
+# ===================== V2.1 增强 API =====================
+
+@app.post("/capsules/embed/{capsule_id}")
+async def create_embedding(capsule_id: str):
+    """为胶囊创建向量嵌入"""
+    if not ENHANCEMENTS_ENABLED or not SEMANTIC_ENABLED:
+        raise HTTPException(status_code=501, detail="语义搜索未启用")
+    
+    capsule = get_capsule(capsule_id)
+    if not capsule:
+        raise HTTPException(status_code=404, detail="胶囊不存在")
+    
+    # 组合文本
+    text = f"{capsule.title} {capsule.content}"
+    embedding = compute_embedding(text)
+    
+    if embedding:
+        store_embedding(capsule_id, embedding)
+        return {"success": True, "capsule_id": capsule_id, "dimensions": len(embedding)}
+    
+    raise HTTPException(status_code=500, detail="嵌入生成失败")
+
+@app.post("/capsules/semantic-search")
+async def semantic_search_endpoint(request: dict):
+    """语义搜索"""
+    query = request.get("query", "")
+    limit = request.get("limit", 10)
+    
+    # 优先使用高级语义搜索 (如果可用)
+    if ENHANCEMENTS_ENABLED and SEMANTIC_ENABLED:
+        try:
+            results = semantic_search(query, limit)
+            return {"query": query, "results": results, "total": len(results), "mode": "embedding"}
+        except Exception as e:
+            print(f"高级搜索失败，使用轻量级: {e}")
+    
+    # 后备: 轻量级搜索
+    try:
+        from search_v2 import simple_semantic_search
+        results = simple_semantic_search(query, limit)
+        return {"query": query, "results": results, "total": len(results), "mode": "keyword"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"搜索失败: {str(e)}")
+
+@app.get("/domains/graph")
+async def get_knowledge_graph():
+    """获取知识图谱"""
+    # 使用轻量级版本
+    try:
+        from search_v2 import get_domain_graph as _get_graph
+        graph = _get_graph()
+        return graph
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"图谱获取失败: {str(e)}")
+
+@app.post("/domains/analyze")
+async def analyze_cross_domain():
+    """分析跨域关联"""
+    if not ENHANCEMENTS_ENABLED:
+        raise HTTPException(status_code=501, detail="跨域分析未启用")
+    
+    links = analyze_cross_domain_links()
+    return {"links": [asdict(l) for l in links], "total": len(links)}
+
+@app.get("/capsules/{capsule_id}/related")
+async def get_related_capsules(capsule_id: str, limit: int = Query(5, ge=1, le=20)):
+    """获取相关胶囊"""
+    try:
+        from search_v2 import get_related_capsules as _get_related
+        recs = _get_related(capsule_id, limit)
+        return {"recommendations": recs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"推荐失败: {str(e)}")
+
+@app.get("/capsules/{capsule_id}/timeline")
+async def get_timeline(capsule_id: str):
+    """获取版本时间线"""
+    if not ENHANCEMENTS_ENABLED:
+        raise HTTPException(status_code=501, detail="时间线功能未启用")
+    
+    timeline = get_capsule_timeline(capsule_id)
+    return {"capsule_id": capsule_id, "timeline": timeline}
+
+@app.get("/capsules/{capsule_id}/multimedia")
+async def get_multimedia(capsule_id: str):
+    """获取多媒体资源"""
+    if not ENHANCEMENTS_ENABLED:
+        raise HTTPException(status_code=501, detail="多模态功能未启用")
+    
+    assets = get_capsule_multimedia(capsule_id)
+    return {"capsule_id": capsule_id, "assets": assets}
+
+@app.post("/capsules/{capsule_id}/multimedia")
+async def add_capsule_multimedia(
+    capsule_id: str,
+    request: dict
+):
+    """添加多媒体资源"""
+    if not ENHANCEMENTS_ENABLED:
+        raise HTTPException(status_code=501, detail="多模态功能未启用")
+    
+    capsule = get_capsule(capsule_id)
+    if not capsule:
+        raise HTTPException(status_code=404, detail="胶囊不存在")
+    
+    file_type = request.get("file_type", "document")
+    filename = request.get("filename", "")
+    url = request.get("url", "")
+    
+    asset = add_multimedia(capsule_id, file_type, filename, url)
+    return asset.to_dict()
+
+@app.get("/recommend")
+async def recommend(domain: str = None, limit: int = Query(5, ge=1, le=20)):
+    """智能推荐"""
+    if not ENHANCEMENTS_ENABLED:
+        raise HTTPException(status_code=501, detail="推荐功能未启用")
+    
+    recs = recommend_capsules(domain=domain, limit=limit)
+    return {"recommendations": [asdict(r) for r in recs]}
+
+# ===================== 外部系统拉取API (附中矩阵对接) =====================
+
+class CapsulePullRequest(BaseModel):
+    """拉取请求"""
+    domain: Optional[str] = None
+    tags: Optional[List[str]] = None
+    status: Optional[str] = "promoted"  # 默认只拉取已推广的
+    min_score: Optional[float] = Query(None, ge=0, le=100)
+    limit: int = Query(50, ge=1, le=200)
+    offset: int = Query(0, ge=0)
+    since: Optional[str] = None  # 更新时间筛选 (ISO格式)
+
+class UnifiedCapsuleResponse(BaseModel):
+    """统一胶囊格式响应 (用于跨平台对接)"""
+    id: str
+    source: str = "kaihub"
+    title: str
+    content: str
+    summary: str
+    category: str
+    tags: List[str]
+    keywords: List[str]
+    author: dict
+    created_at: str
+    updated_at: str
+    metrics: dict
+    visibility: str = "public"
+    sync_status: str = "synced"
+
+@app.post("/api/v1/capsule/pull")
+async def pull_capsules(request: CapsulePullRequest):
+    """
+    外部系统拉取知识胶囊API
+    用于附中矩阵等外部系统从KaiHub拉取胶囊
+    """
+    # 直接查询数据库
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    query = "SELECT * FROM capsules WHERE 1=1"
+    params = []
+    
+    if request.domain:
+        query += " AND domain = ?"
+        params.append(request.domain)
+    
+    if request.min_score:
+        query += " AND datm_score >= ?"
+        params.append(request.min_score)
+    
+    query += f" ORDER BY updated_at DESC LIMIT {request.limit} OFFSET {request.offset}"
+    
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+    conn.close()
+    
+    # 转换为统一格式
+    unified_capsules = []
+    for row in rows:
+        # 直接使用列数据
+        import json
+        tags = json.loads(row['tags']) if row['tags'] else []
+        
+        # 过滤更新时间
+        if request.since:
+            since_dt = datetime.fromisoformat(request.since.replace('Z', '+00:00'))
+            updated_at = datetime.fromisoformat(row['updated_at'].replace('Z', '+00:00'))
+            if updated_at <= since_dt:
+                continue
+        
+        # 过滤标签
+        if request.tags:
+            if not any(tag in tags for tag in request.tags):
+                continue
+        
+        unified = UnifiedCapsuleResponse(
+            id=row['id'],
+            source="kaihub",
+            title=row['title'],
+            content=row['content'][:5000] if row['content'] else "",
+            summary=row['content'][:500] if row['content'] else "",
+            category=row['domain'] or "general",
+            tags=tags,
+            keywords=tags[:5],  # 使用标签作为关键词
+            author={
+                "id": row['author'] or "unknown",
+                "name": row['author'] or "Kai",
+                "platform": "kaihub"
+            },
+            created_at=row['created_at'],
+            updated_at=row['updated_at'],
+            metrics={
+                "views": 0,
+                "likes": 0,
+                "citations": 0,
+                "rating": 0,
+                "datm_score": row['datm_score'] or 0
+            },
+            visibility="public",
+            sync_status="synced"
+        )
+        unified_capsules.append(unified)
+    
+    return {
+        "count": len(unified_capsules),
+        "capsules": [uc.dict() for uc in unified_capsules],
+        "pagination": {
+            "limit": request.limit,
+            "offset": request.offset,
+            "has_more": len(unified_capsules) == request.limit
+        }
+    }
+
+@app.get("/api/v1/capsule/pull/domains")
+async def get_available_domains():
+    """获取可用的领域列表"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT domain FROM capsules WHERE domain IS NOT NULL")
+    domains = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return {"domains": domains}
+
+@app.get("/api/v1/capsule/pull/tags")
+async def get_available_tags():
+    """获取可用的标签列表"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT tags FROM capsules WHERE tags IS NOT NULL")
+    all_tags = set()
+    for row in cursor.fetchall():
+        if row[0]:
+            import json
+            try:
+                tags = json.loads(row[0])
+                all_tags.update(tags)
+            except:
+                pass
+    conn.close()
+    return {"tags": list(all_tags)}
+
+# ===================== 同步API (外部系统推送) =====================
+
+class CapsuleSyncRequest(BaseModel):
+    """同步请求 (从外部系统接收胶囊)"""
+    id: str
+    title: str
+    content: str
+    summary: Optional[str] = ""
+    category: str = "general"
+    tags: List[str] = []
+    keywords: List[str] = []
+    author: dict
+    visibility: str = "public"
+
+@app.post("/api/v1/capsule/sync")
+async def sync_capsule(request: CapsuleSyncRequest):
+    """
+    外部系统同步知识胶囊到KaiHub
+    用于附中矩阵等外部系统推送胶囊到KaiHub
+    """
+    import json
+    from datetime import datetime
+    
+    # 生成ID (如果未提供)
+    capsule_id = request.id or f"capsule_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    
+    # 创建时间戳
+    now = datetime.now().isoformat()
+    
+    # 保存到数据库
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # 检查是否已存在
+    cursor.execute("SELECT id FROM capsules WHERE id = ?", (capsule_id,))
+    exists = cursor.fetchone()
+    
+    if exists:
+        # 更新
+        cursor.execute("""
+            UPDATE capsules SET 
+                title = ?, content = ?, domain = ?, tags = ?, 
+                updated_at = ?, metadata = ?
+            WHERE id = ?
+        """, (
+            request.title,
+            request.content,
+            request.category,
+            json.dumps(request.tags),
+            now,
+            json.dumps({"source": "external_sync", "author": request.author}),
+            capsule_id
+        ))
+        action = "updated"
+    else:
+        # 插入
+        cursor.execute("""
+            INSERT INTO capsules (id, title, content, source, domain, tags, datm_score, author, created_at, updated_at, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            capsule_id,
+            request.title,
+            request.content,
+            "external_sync",
+            request.category,
+            json.dumps(request.tags),
+            0,  # 初始评分
+            request.author.get("name", "Unknown"),
+            now,
+            now,
+            json.dumps({"source": "external_sync", "author": request.author, "visibility": request.visibility})
+        ))
+        action = "created"
+    
+    conn.commit()
+    conn.close()
+    
+    return {
+        "success": True,
+        "action": action,
+        "capsule_id": capsule_id,
+        "message": f"胶囊已{action}"
+    }
+
+@app.post("/api/v1/capsule/batch-sync")
+async def batch_sync_capsules(request: dict):
+    """批量同步胶囊"""
+    capsules = request.get("capsules", [])
+    results = []
+    
+    for capsule_data in capsules:
+        try:
+            req = CapsuleSyncRequest(**capsule_data)
+            # 简化处理 - 直接调用上面的逻辑
+            import json
+            from datetime import datetime
+            
+            capsule_id = req.id or f"capsule_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            now = datetime.now().isoformat()
+            
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT id FROM capsules WHERE id = ?", (capsule_id,))
+            exists = cursor.fetchone()
+            
+            if exists:
+                cursor.execute("""
+                    UPDATE capsules SET title = ?, content = ?, domain = ?, tags = ?, updated_at = ?
+                    WHERE id = ?
+                """, (req.title, req.content, req.category, json.dumps(req.tags), now, capsule_id))
+                action = "updated"
+            else:
+                cursor.execute("""
+                    INSERT INTO capsules (id, title, content, source, domain, tags, datm_score, author, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (capsule_id, req.title, req.content, "external_sync", req.category, json.dumps(req.tags), 0, req.author.get("name", "Unknown"), now, now))
+                action = "created"
+            
+            conn.commit()
+            conn.close()
+            
+            results.append({"capsule_id": capsule_id, "action": action, "success": True})
+        except Exception as e:
+            results.append({"error": str(e), "success": False})
+    
+    success_count = sum(1 for r in results if r.get("success"))
+    return {
+        "total": len(capsules),
+        "success": success_count,
+        "failed": len(capsules) - success_count,
+        "results": results
+    }
+
+# ===================== V2.1 增强功能导入 =====================
+try:
+    from enhancements import (
+        init_db_enhancements,
+        compute_embedding,
+        store_embedding,
+        semantic_search,
+        analyze_cross_domain_links,
+        get_domain_graph,
+        add_multimedia,
+        get_capsule_multimedia,
+        recommend_capsules,
+        get_capsule_timeline,
+        SEMANTIC_ENABLED
+    )
+    ENHANCEMENTS_ENABLED = True
+except ImportError as e:
+    print(f"⚠️ 增强模块加载失败: {e}")
+    ENHANCEMENTS_ENABLED = False
+    SEMANTIC_ENABLED = False
+
+# 初始化增强数据库
+if ENHANCEMENTS_ENABLED:
+    init_db_enhancements()
+
 # ===================== 启动 =====================
 if __name__ == "__main__":
     import uvicorn
+    print(f"""
+╔════════════════════════════════════════════════════════════╗
+║       知识胶囊服务 V2.1 (EvoMap Enhanced)                   ║
+╠════════════════════════════════════════════════════════════╣
+║  版本: 2.1.0                                               ║
+║  端口: 8005                                                ║
+╠════════════════════════════════════════════════════════════╣
+║  核心功能:                                                  ║
+║  ✓ 内容寻址 (SHA256)                                       ║
+║  ✓ DATM 四维评分                                           ║
+║  ✓ Gene 策略模板                                           ║
+║  ✓ 进化事件追踪                                            ║
+║  ✓ 活胶囊版本控制                                          ║
+╠════════════════════════════════════════════════════════════╣
+║  V2.1 增强功能:                                            ║
+║  {'✓ 语义向量搜索' if SEMANTIC_ENABLED else '✗ 语义向量搜索 (需安装依赖)'}       ║
+║  {'✓ 跨域关联引擎' if ENHANCEMENTS_ENABLED else '✗ 跨域关联引擎'}              ║
+║  {'✓ 多模态支持' if ENHANCEMENTS_ENABLED else '✗ 多模态支持'}                  ║
+║  {'✓ 智能推荐' if ENHANCEMENTS_ENABLED else '✗ 智能推荐'}                      ║
+╚════════════════════════════════════════════════════════════╝
+    """)
     uvicorn.run(app, host="0.0.0.0", port=8005)
