@@ -528,8 +528,45 @@ async def root():
 @app.post("/capsules")
 async def create_capsule(data: dict):
     """创建知识胶囊"""
-    capsule = create_capsule(data)
-    return capsule.to_dict()
+    # 直接创建并保存到数据库
+    import json
+    from datetime import datetime
+    
+    now = datetime.utcnow().isoformat()
+    
+    # 生成ID
+    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+    import uuid
+    capsule_id = f"capsule_{timestamp}_{uuid.uuid4().hex[:8]}"
+    
+    # 保存到数据库
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    tags = data.get('tags', [])
+    if isinstance(tags, list):
+        tags = json.dumps(tags)
+    
+    cursor.execute("""
+        INSERT INTO capsules (id, title, content, source, domain, tags, datm_score, author, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        capsule_id,
+        data.get('title', 'Untitled'),
+        data.get('content', ''),
+        'api',
+        data.get('domain', 'general'),
+        tags,
+        data.get('datm_score', 0),
+        data.get('author', 'Kai'),
+        now,
+        now
+    ))
+    
+    conn.commit()
+    conn.close()
+    
+    return {"id": capsule_id, "status": "created", "created_at": now}
 
 @app.get("/capsules")
 async def list_capsules(
@@ -539,8 +576,48 @@ async def list_capsules(
     limit: int = Query(50, ge=1, le=200)
 ):
     """列出胶囊"""
-    capsules = list_capsules(domain, status, min_score, limit)
-    return {"capsules": [c.to_dict() for c in capsules], "total": len(capsules)}
+    # 直接查询数据库
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    
+    query = "SELECT * FROM capsules WHERE 1=1"
+    params = []
+    
+    if domain:
+        query += " AND domain = ?"
+        params.append(domain)
+    
+    if min_score:
+        query += " AND datm_score >= ?"
+        params.append(min_score)
+    
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(min(limit, 200))
+    
+    cursor.execute(query, params)
+    
+    capsules = []
+    for row in cursor.fetchall():
+        # 直接返回字典格式
+        import json
+        tags = json.loads(row['tags']) if row['tags'] else []
+        capsule_dict = {
+            'id': row['id'],
+            'title': row['title'],
+            'content': row['content'],
+            'level': 'standard',
+            'domain': row['domain'] or "general",
+            'tags': tags,
+            'author': row['author'] or "Kai",
+            'datm_score': row['datm_score'] or 0,
+            'created_at': row['created_at'],
+            'updated_at': row['updated_at']
+        }
+        capsules.append(capsule_dict)
+    
+    conn.close()
+    return {"capsules": capsules, "total": len(capsules)}
 
 @app.get("/capsules/{capsule_id}")
 async def get_capsule(capsule_id: str):
