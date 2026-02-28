@@ -10,6 +10,7 @@ import hashlib
 import json
 import sqlite3
 import os
+import asyncio
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass, field, asdict
@@ -494,17 +495,17 @@ def get_stats() -> Dict:
     cursor.execute("SELECT AVG(datm_score) FROM capsules WHERE datm_score IS NOT NULL")
     avg_score = cursor.fetchone()[0] or 0
     
-    cursor.execute("SELECT status, COUNT(*) FROM capsules GROUP BY status")
-    status_dist = {row[0]: row[1] for row in cursor.fetchall()}
-    
     cursor.execute("SELECT domain, COUNT(*) FROM capsules GROUP BY domain")
-    domain_dist = {row[0]: row[1] for row in cursor.fetchall()}
+    domain_dist = {row[0]: row[1] for row in cursor.fetchall() if row[0]}
+    
+    cursor.execute("SELECT author, COUNT(*) FROM capsules GROUP BY author")
+    author_dist = {row[0]: row[1] for row in cursor.fetchall() if row[0]}
     
     return {
         "total_capsules": total,
         "avg_datm_score": round(avg_score, 2),
-        "status_distribution": status_dist,
-        "domain_distribution": domain_dist
+        "domain_distribution": domain_dist,
+        "author_distribution": author_dist
     }
 
 # ===================== API 路由 =====================
@@ -648,9 +649,24 @@ async def create_gene(data: dict):
     return asdict(gene)
 
 @app.get("/stats")
-async def get_stats():
+def stats():
     """统计信息"""
-    return get_stats()
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT COUNT(*) FROM capsules")
+        total = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT AVG(datm_score) FROM capsules WHERE datm_score IS NOT NULL")
+        avg_score = cursor.fetchone()[0] or 0
+        
+        return {
+            "total_capsules": total,
+            "avg_datm_score": round(avg_score, 2)
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 # ===================== V2.1 增强 API =====================
 
@@ -1069,6 +1085,12 @@ except ImportError as e:
     print(f"⚠️ 增强模块加载失败: {e}")
     ENHANCEMENTS_ENABLED = False
     SEMANTIC_ENABLED = False
+
+# ===================== 辩论引擎模块 =====================
+from debate_engine import router as debate_router
+from feedback_system import router as feedback_router
+app.include_router(debate_router)
+app.include_router(feedback_router)
 
 # 初始化增强数据库
 if ENHANCEMENTS_ENABLED:
