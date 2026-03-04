@@ -696,20 +696,16 @@ async def semantic_search_endpoint(request: dict):
     query = request.get("query", "")
     limit = request.get("limit", 10)
     
-    # 优先使用高级语义搜索 (如果可用)
-    if ENHANCEMENTS_ENABLED and SEMANTIC_ENABLED:
-        try:
-            results = semantic_search(query, limit)
-            return {"query": query, "results": results, "total": len(results), "mode": "embedding"}
-        except Exception as e:
-            print(f"高级搜索失败，使用轻量级: {e}")
-    
-    # 后备: 轻量级搜索
+    # 使用轻量级搜索 (跳过高级语义搜索以避免网络问题)
     try:
         from search_v2 import simple_semantic_search
         results = simple_semantic_search(query, limit)
+        print(f"DEBUG: search('{query}') returned {len(results)} results")
         return {"query": query, "results": results, "total": len(results), "mode": "keyword"}
     except Exception as e:
+        import traceback
+        print(f"ERROR: search failed - {e}")
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"搜索失败: {str(e)}")
 
 @app.get("/domains/graph")

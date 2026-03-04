@@ -6,10 +6,10 @@ import json
 import sqlite3
 from typing import List, Dict
 
-# 尝试连接两个数据库
+# 尝试连接数据库，优先V2
 DB_PATHS = [
-    "/Users/wanyview/clawd/capsule_service/capsules.db",  # V1
-    "/Users/wanyview/clawd/capsule_service_v2/capsules.db"  # V2
+    "/Users/wanyview/clawd/capsule_service_v2/capsules.db",  # V2 (优先)
+    "/Users/wanyview/clawd/capsule_service/capsules.db"  # V1 (备用)
 ]
 
 def get_db():
