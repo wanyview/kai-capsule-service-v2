@@ -1116,4 +1116,54 @@ if __name__ == "__main__":
 ║  {'✓ 智能推荐' if ENHANCEMENTS_ENABLED else '✗ 智能推荐'}                      ║
 ╚════════════════════════════════════════════════════════════╝
     """)
+
+
+# ===================== 分享功能 =====================
+# ===================== 用户注册 =====================
+users_db = {}
+
+@app.post("/api/register")
+async def register_user(username: str = "", email: str = ""):
+    if username in users_db:
+        raise HTTPException(status_code=400, detail="用户名已存在")
+    user_id = f"user_{len(users_db) + 1}"
+    users_db[username] = {"id": user_id, "username": username, "email": email}
+    return {"user_id": user_id, "username": username, "status": "registered"}
+
+
+# ===================== 分享功能 =====================
+# ===================== 用户注册 =====================
+users_db = {}
+
+@app.post("/api/register")
+async def register_user(username: str = "", email: str = ""):
+    if username in users_db:
+        raise HTTPException(status_code=400, detail="用户名已存在")
+    user_id = f"user_{len(users_db) + 1}"
+    users_db[username] = {"id": user_id, "username": username, "email": email}
+    return {"user_id": user_id, "username": username, "status": "registered"}
+
+
+# ===================== 分享功能 =====================
+@app.post("/api/share")
+async def create_share_link(capsule_id: str = "", expires_days: int = 7):
+    import uuid
+    share_token = str(uuid.uuid4())[:8]
+    return {
+        "share_url": f"https://kaihub.com/share/{share_token}",
+        "capsule_id": capsule_id,
+        "expires_days": expires_days
+    }
+
+# ===================== 用户注册 =====================
+users_db = {}
+
+@app.post("/api/register")
+async def register_user(username: str = "", email: str = ""):
+    if username in users_db:
+        raise HTTPException(status_code=400, detail="用户名已存在")
+    user_id = f"user_{len(users_db) + 1}"
+    users_db[username] = {"id": user_id, "username": username, "email": email}
+    return {"user_id": user_id, "username": username, "status": "registered"}
+
     uvicorn.run(app, host="0.0.0.0", port=8005)
